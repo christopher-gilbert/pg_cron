@@ -149,6 +149,7 @@ static void bgw_generate_returned_message(StringInfoData *display_msg, ErrorData
 char *CronTableDatabaseName = "postgres";
 static bool CronLogStatement = true;
 static bool CronLogRun = true;
+static bool CronLogOutput = false;
 static bool CronReloadConfig = false;
 
 /* flags set by signal handlers */
@@ -229,6 +230,16 @@ _PG_init(void)
 		gettext_noop("Log all jobs runs into the job_run_details table"),
 		NULL,
 		&CronLogRun,
+		true,
+		PGC_POSTMASTER,
+		GUC_SUPERUSER_ONLY,
+		NULL, NULL, NULL);
+
+	DefineCustomBoolVariable(
+		"cron.log_output",
+		gettext_noop("Include output from job execution in the job_run_details table, if it is a single scalar value"),
+		NULL,
+		&CronLogOutput,
 		true,
 		PGC_POSTMASTER,
 		GUC_SUPERUSER_ONLY,
@@ -1313,7 +1324,7 @@ ManageCronTask(CronTask *task, TimestampTz currentTime)
 				task->state = CRON_TASK_CONNECTING;
 
 				if (CronLogRun)
-					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_CONNECTING), NULL, NULL, NULL);
+					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_CONNECTING), NULL, NULL, NULL, NULL);
 
 				break;
 			}
@@ -1470,7 +1481,7 @@ ManageCronTask(CronTask *task, TimestampTz currentTime)
 			start_time = GetCurrentTimestamp();
 
 			if (CronLogRun)
-				UpdateJobRunDetail(task->runId, &pid, GetCronStatus(CRON_STATUS_RUNNING), NULL, &start_time, NULL);
+				UpdateJobRunDetail(task->runId, &pid, GetCronStatus(CRON_STATUS_RUNNING), NULL, NULL, &start_time, NULL);
 
 			task->state = CRON_TASK_BGW_RUNNING;
 			break;
@@ -1518,7 +1529,7 @@ ManageCronTask(CronTask *task, TimestampTz currentTime)
 
 				pid = (pid_t) PQbackendPID(connection);
 				if (CronLogRun)
-					UpdateJobRunDetail(task->runId, &pid, GetCronStatus(CRON_STATUS_SENDING), NULL, NULL, NULL);
+					UpdateJobRunDetail(task->runId, &pid, GetCronStatus(CRON_STATUS_SENDING), NULL, NULL, NULL, NULL);
 			}
 			else if (pollingStatus == PGRES_POLLING_FAILED)
 			{
@@ -1584,7 +1595,7 @@ ManageCronTask(CronTask *task, TimestampTz currentTime)
 
 				start_time = GetCurrentTimestamp();
 				if (CronLogRun)
-					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_RUNNING), NULL, &start_time, NULL);
+					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_RUNNING), NULL, NULL, &start_time, NULL);
 			}
 			else
 			{
@@ -1705,7 +1716,7 @@ ManageCronTask(CronTask *task, TimestampTz currentTime)
 			if (task->errorMessage != NULL)
 			{
 				if (CronLogRun)
-					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, NULL);
+					UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, NULL, NULL);
 
 				ereport(LOG, (errmsg("cron job " INT64_FORMAT " %s",
 									 jobId, task->errorMessage)));
@@ -1775,7 +1786,7 @@ GetTaskFeedback(PGresult *result, CronTask *task)
 			char *cmdTuples = PQcmdTuples(result);
 
 			if (CronLogRun)
-				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), cmdStatus, NULL, &end_time);
+				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), cmdStatus, NULL, NULL, &end_time);
 
 			if (CronLogStatement)
 			{
@@ -1795,7 +1806,7 @@ GetTaskFeedback(PGresult *result, CronTask *task)
 			task->state = CRON_TASK_ERROR;
 
 			if (CronLogRun)
-				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, &end_time);
+				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, NULL, &end_time);
 
 			PQclear(result);
 
@@ -1812,7 +1823,7 @@ GetTaskFeedback(PGresult *result, CronTask *task)
 			task->state = CRON_TASK_ERROR;
 
 			if (CronLogRun)
-				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, &end_time);
+				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), task->errorMessage, NULL, NULL, &end_time);
 
 			PQclear(result);
 
@@ -1831,11 +1842,15 @@ GetTaskFeedback(PGresult *result, CronTask *task)
 			char  rows[MAXINT8LEN + 1];
 			char  outputrows[MAXINT8LEN + 4 + 1];
 
+			char *cmdOutput = NULL;
 			pg_lltoa(tupleCount, rows);
 			snprintf(outputrows, sizeof(outputrows), "%s %s", rows, rowString);
 
+                        if (PQntuples(result) == 1 && PQnfields(result) == 1)
+                                cmdOutput = PQgetvalue(result, 0, 0);
+			
 			if (CronLogRun)
-				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), outputrows, NULL, &end_time);
+				UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), outputrows, cmdOutput, NULL, &end_time);
 
 			if (CronLogStatement)
 			{
@@ -1911,11 +1926,11 @@ ProcessBgwTaskFeedback(CronTask *task, bool running)
 					{
 
 						if (edata.elevel >= ERROR)
-							UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), display_msg.data, NULL, &end_time);
+							UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_FAILED), display_msg.data, NULL, NULL, &end_time);
 						else if (running)
-							UpdateJobRunDetail(task->runId, NULL, NULL, display_msg.data, NULL, NULL);
+							UpdateJobRunDetail(task->runId, NULL, NULL, display_msg.data, NULL, NULL, NULL);
 						else
-							UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), display_msg.data, NULL, &end_time);
+							UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), display_msg.data, NULL, NULL, &end_time);
 					}
 
 					ereport(LOG, (errmsg("cron job " INT64_FORMAT ": %s",
@@ -1935,7 +1950,7 @@ ProcessBgwTaskFeedback(CronTask *task, bool running)
 					nonconst_tag = strdup(tag);
 
 					if (CronLogRun)
-						UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), nonconst_tag, NULL, &end_time);
+						UpdateJobRunDetail(task->runId, NULL, GetCronStatus(CRON_STATUS_SUCCEEDED), nonconst_tag, NULL, NULL, &end_time);
 
 					if (CronLogStatement) {
 						cmdTuples = pg_cron_cmdTuples(nonconst_tag);

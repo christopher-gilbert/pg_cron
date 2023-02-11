@@ -56,8 +56,8 @@ extern List * LoadCronJobList(void);
 extern CronJob * GetCronJob(int64 jobId);
 
 extern void InsertJobRunDetail(int64 runId, int64 *jobId, char *database, char *username, char *command, char *status);
-extern void UpdateJobRunDetail(int64 runId, int32 *job_pid, char *status, char *return_message, TimestampTz *start_time,
-									TimestampTz *end_time);
+extern void UpdateJobRunDetail(int64 runId, int32 *job_pid, char *status, char *return_message, char *job_output,
+		                                                     TimestampTz *start_time, TimestampTz *end_time);
 extern int64 NextRunId(void);
 extern void MarkPendingRunsAsFailed(void);
 extern char *GetCronStatus(CronStatus cronstatus);

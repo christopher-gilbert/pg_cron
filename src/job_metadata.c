@@ -1101,8 +1101,8 @@ InsertJobRunDetail(int64 runId, int64 *jobId, char *database, char *username, ch
 }
 
 void
-UpdateJobRunDetail(int64 runId, int32 *job_pid, char *status, char *return_message, TimestampTz *start_time,
-                                                                        TimestampTz *end_time)
+UpdateJobRunDetail(int64 runId, int32 *job_pid, char *status, char *return_message, char *job_output,
+		                                         TimestampTz *start_time, TimestampTz *end_time)
 {
 	StringInfoData querybuf;
 	Oid argTypes[6];
@@ -1158,6 +1158,15 @@ UpdateJobRunDetail(int64 runId, int32 *job_pid, char *status, char *return_messa
 		i++;
 
 		appendStringInfo(&querybuf, " return_message = $%d,", i);
+	}
+
+        if (job_output != NULL)
+	{
+		argTypes[i] = TEXTOID;
+		argValues[i] = CStringGetTextDatum(job_output);
+		i++;
+
+		appendStringInfo(&querybuf, " output = $%d,", i);
 	}
 
         if (start_time != NULL)
